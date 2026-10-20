@@ -9,7 +9,9 @@
     "test": "node --test \"test/*.test.js\"",
     "demo:agent": "node scripts/demo-agent.js",
     "check:secrets": "node scripts/check-secrets.js --all",
-    "prepare": "node scripts/install-hooks.js"
+    "prepare": "node scripts/install-hooks.js",
+    "reset": "node scripts/reset.js",
+    "fresh": "node scripts/reset.js && node src/server.js --empty"
   },
   "keywords": [],
   "author": "",
