@@ -3,13 +3,14 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { Store } from './store.js';
+import { Dispatcher } from './agents.js';
 import { createMcpServer } from './mcp.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 3000);
 const HOST = process.env.HOST || '127.0.0.1';
 
-export function createApp(store = new Store()) {
+export function createApp(store = new Store(), dispatcher = new Dispatcher(store, { mcpUrl: () => `http://127.0.0.1:${PORT}/mcp` })) {
   const app = express();
   app.use(express.json({ limit: '1mb' }));
 
@@ -38,13 +39,18 @@ export function createApp(store = new Store()) {
   const actor = (req) => req.body?.actor || 'human';
 
   api.get('/state', h(() => ({
-    tasks: store.listTasks(), questions: store.listQuestions(), events: store.recentEvents(), stats: store.stats(),
+    tasks: store.listTasks(), agents: dispatcher.list(), questions: store.listQuestions(), events: store.recentEvents(), stats: store.stats(),
   })));
   api.get('/tasks/:id', h(r => store.getTask(+r.params.id)));
   api.post('/tasks', h(r => store.createTask(r.body, actor(r))));
   api.patch('/tasks/:id', h(r => store.updateTask(+r.params.id, r.body, actor(r))));
   api.delete('/tasks/:id', h(r => store.deleteTask(+r.params.id)));
   api.post('/tasks/:id/review', h(r => store.reviewTask(+r.params.id, r.body.decision, r.body.comment, actor(r))));
+  api.post('/tasks/:id/dispatch', h(r => { dispatcher.dispatch(+r.params.id, r.body.agent); return store.getTask(+r.params.id); }));
+  api.post('/runs/:id/stop', h(r => dispatcher.stop(+r.params.id)));
+  api.get('/runs/:id', h(r => store.getRun(+r.params.id)));
+  api.get('/agents', h(() => dispatcher.list()));
+  api.patch('/agents/:name', h(r => { store.updateAgent(r.params.name, r.body); return dispatcher.list(); }));
   api.post('/tasks/:id/comments', h(r => store.addComment(+r.params.id, r.body.body, actor(r))));
   api.post('/tasks/:id/questions', h(r => store.askQuestion({ ...r.body, task_id: +r.params.id }, r.body.actor || 'human')));
   api.post('/questions/:id/answer', h(r => store.answerQuestion(+r.params.id, r.body.answer, actor(r))));
@@ -71,7 +77,11 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     const { seed } = await import('./seed.js');
     seed(store);
   }
-  createApp(store).listen(PORT, HOST, () => {
+  const dispatcher = new Dispatcher(store, { mcpUrl: () => `http://127.0.0.1:${PORT}/mcp` });
+  for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => { dispatcher.stopAll(); process.exit(0); });
+  createApp(store, dispatcher).listen(PORT, HOST, () => {
+    const found = dispatcher.list().filter(a => a.available).map(a => a.name);
+    console.log(`  Agents found: ${found.join(', ') || 'none (install Claude Code or OpenCode)'}`);
     console.log(`\n  TaskTracker  →  http://${HOST}:${PORT}`);
     console.log(`  MCP endpoint →  http://${HOST}:${PORT}/mcp  (Streamable HTTP)\n`);
   });

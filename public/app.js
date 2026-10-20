@@ -11,7 +11,7 @@ const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<'
 const time = (iso) => new Date(iso).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
 const dt = (iso) => new Date(iso).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
 
-let state = { tasks: [], questions: [], events: [], stats: { byStatus: {}, openQuestions: 0, blockingQuestions: 0 } };
+let state = { tasks: [], agents: [], questions: [], events: [], stats: { byStatus: {}, openQuestions: 0, blockingQuestions: 0 } };
 let openTaskId = null;
 let search = '';
 let agentFilter = '';
@@ -93,7 +93,7 @@ function card(t) {
     <div class="id">#${t.id}</div><h4>${esc(t.title)}</h4>
     <div class="meta">${avatar(t.assignee)}
       ${t.labels.map(l => `<span class="chip">${esc(l)}</span>`).join('')}
-      ${t.comment_count ? `<span>💬${t.comment_count}</span>` : ''}${stale(t)}</div>
+      ${t.comment_count ? `<span>💬${t.comment_count}</span>` : ''}${stale(t)}${t.run_status ? `<span class="chip running">${t.run_status === 'running' ? '⚙ агент работает' : '⏳ в очереди'}</span>` : ''}</div>
     ${t.status === 'review' ? `<div class="review-bar"><button class="btn sm ok" data-accept="${t.id}">✓ Принять</button><button class="btn sm" data-rework="${t.id}">↩ Вернуть</button></div>` : ''}</article>`;
 }
 
@@ -146,11 +146,15 @@ async function openTask(id) {
           <label class="field full">Название<input id="f-title" value="${esc(t.title)}"></label>
           <label class="field">Статус<select id="f-status">${STATUSES.map(([s, n]) => `<option value="${s}" ${s === t.status ? 'selected' : ''}>${n}</option>`).join('')}</select></label>
           <label class="field">Приоритет<select id="f-prio">${PRIOS.map(p => `<option value="${p}" ${p === t.priority ? 'selected' : ''}>${PRIO_NAME[p]}</option>`).join('')}</select></label>
-          <label class="field">Исполнитель<input id="f-assignee" value="${esc(t.assignee || '')}" placeholder="имя агента"></label>
+          <label class="field">Исполнитель${agentSelect(t.assignee)}</label>
           <label class="field">Метки<input id="f-labels" value="${esc(t.labels.join(', '))}"></label>
           <label class="field full">Описание<textarea id="f-desc">${esc(t.description)}</textarea></label>
         </div>
-        <div class="row"><button class="btn primary" id="save">Сохранить</button><button class="btn danger" id="del">Удалить</button></div>
+        <div class="row"><button class="btn primary" id="save">Сохранить</button>
+          <button class="btn ok" id="dispatch" ${t.last_run && ['queued', 'running'].includes(t.last_run.status) || t.status === 'done' ? 'disabled' : ''}>▶ Отправить агента</button>
+          <button class="btn danger" id="del">Удалить</button></div>
+        ${!state.agents.some(a => a.available) ? '<p class="hint">Агенты не найдены. Установите Claude Code или OpenCode: после перезапуска сервера они появятся в списке.</p>' : ''}
+        ${runBlock(t)}
         ${t.status === 'review' ? `<div class="block review-block"><h3>Ревью: агент сдал работу</h3>
           <textarea data-keep="review" id="f-review" placeholder="Замечания (обязательны, если возвращаете на доработку)"></textarea>
           <div class="row" style="margin-top:8px"><button class="btn ok" id="accept">✓ Принять — готово</button><button class="btn danger" id="reject">↩ Вернуть на доработку</button></div></div>` : ''}
@@ -160,8 +164,47 @@ async function openTask(id) {
           ${t.comments.map(c => `<div class="comment"><div class="who"><span>${avatar(c.author)}</span><span>${dt(c.created_at)}</span></div>${esc(c.body)}</div>`).join('') || '<p class="hint">Пока нет</p>'}
           <div class="row"><input data-keep="comment" id="f-comment" placeholder="Написать агенту или команде…"><button class="btn" id="send-comment">Отправить</button></div></div>
       </div></div>`;
+    const lg = $('#runlog'); if (lg) lg.scrollTop = lg.scrollHeight;
   });
 }
+const RUN_NAME = { queued: 'в очереди', running: 'работает', finished: 'сеанс завершён', failed: 'ошибка', stopped: 'остановлен', lost: 'прерван' };
+
+function agentSelect(current) {
+  const list = state.agents.filter(a => a.enabled && a.available);
+  const known = list.some(a => a.name === current);
+  return `<select id="f-assignee"><option value="">— не назначен —</option>
+    ${list.map(a => `<option value="${esc(a.name)}" ${a.name === current ? 'selected' : ''}>🤖 ${esc(a.name)}${a.experimental ? ' (бета)' : ''}</option>`).join('')}
+    ${current && !known ? `<option value="${esc(current)}" selected>${esc(current)}</option>` : ''}</select>`;
+}
+
+function runBlock(t) {
+  const r = t.last_run;
+  if (!r) return '';
+  const active = ['queued', 'running'].includes(r.status);
+  return `<div class="block run-block"><h3>Запуск агента <span class="run-st ${r.status}">${esc(r.agent)} · ${RUN_NAME[r.status] || r.status}</span>
+    ${active ? `<button class="btn sm danger" data-stop="${r.id}">■ Остановить</button>` : ''}</h3>
+    <pre class="pre runlog" id="runlog">${esc(r.log || (active ? 'Запускаю…' : '(лог пуст)'))}</pre></div>`;
+}
+
+function agentsModal() {
+  const m = $('#modal'); m.hidden = false;
+  const list = state.agents;
+  m.innerHTML = `<div class="sheet center" style="width:min(760px,100%)"><div class="sheet-head"><h2>Агенты</h2><button class="btn sm" data-close>✕</button></div>
+    <div class="sheet-body"><p class="hint">Здесь агенты, найденные на этом компьютере. Выберите любого в карточке задачи и нажмите «▶ Отправить агента»: он запустится в фоне, подключится к трекеру и будет задавать вам вопросы в «Линии связи».</p>
+    ${list.map(a => `<div class="agent-card" data-agent="${esc(a.name)}">
+      <div class="agent-top"><b>🤖 ${esc(a.name)}</b><span class="chip">${esc(a.label)}</span>
+        <span class="chip ${a.available ? 'okc' : 'badc'}">${a.available ? 'найден' : 'не найден'}</span>${a.experimental ? '<span class="chip">бета, не проверено</span>' : ''}
+        ${a.busy_task ? `<span class="chip stale">занят: #${a.busy_task}</span>` : ''}</div>
+      <div class="agent-path">${esc(a.bin)}</div>
+      <div class="fields">
+        <label class="field full">Папка проекта${a.workdir_ok ? '' : ' — не существует!'}<input data-f="workdir" value="${esc(a.workdir)}"></label>
+        <label class="field">Права<select data-f="mode"><option value="safe" ${a.mode === 'safe' ? 'selected' : ''}>Безопасно: правка файлов, без команд</option><option value="full" ${a.mode === 'full' ? 'selected' : ''}>Полный доступ (команды, сеть)</option></select></label>
+        <label class="field">Включён<select data-f="enabled"><option value="1" ${a.enabled ? 'selected' : ''}>да</option><option value="0" ${a.enabled ? '' : 'selected'}>нет</option></select></label>
+      </div><div class="row"><button class="btn sm primary" data-save-agent="${esc(a.name)}">Сохранить</button></div></div>`).join('')
+      || '<div class="quiet"><b>агентов нет</b>Установите Claude Code (<code>claude</code>) или OpenCode (<code>opencode</code>) и перезапустите сервер.</div>'}
+    </div></div>`;
+}
+
 function closeModal() { openTaskId = null; $('#modal').hidden = true; $('#modal').innerHTML = ''; }
 
 function newTaskModal() {
@@ -196,6 +239,17 @@ ask_human   check_answer   wait_for_answer   get_inbox</pre></div>
 document.addEventListener('click', async (e) => {
   const t = e.target;
   if (t.closest('[data-close]') || t === $('#modal')) return closeModal();
+  const stop = t.closest('[data-stop]');
+  if (stop) { await api(`/runs/${stop.dataset.stop}/stop`, 'POST', {}); toast('Агент остановлен'); await refresh(); return openTask(openTaskId); }
+  const sa = t.closest('[data-save-agent]');
+  if (sa) {
+    const box = sa.closest('.agent-card');
+    await api('/agents/' + encodeURIComponent(sa.dataset.saveAgent), 'PATCH', {
+      workdir: box.querySelector('[data-f=workdir]').value.trim(), mode: box.querySelector('[data-f=mode]').value,
+      enabled: box.querySelector('[data-f=enabled]').value === '1',
+    });
+    toast('Сохранено'); await refresh(); return agentsModal();
+  }
   const acc = t.closest('[data-accept]'); if (acc) return review(+acc.dataset.accept, 'accept');
   const rw = t.closest('[data-rework]'); if (rw) { await openTask(+rw.dataset.rework); return $('#f-review')?.focus(); }
   const cardEl = t.closest('.card'); if (cardEl) return openTask(+cardEl.dataset.id);
@@ -216,16 +270,21 @@ document.addEventListener('click', async (e) => {
     }
     case 'new-btn': return newTaskModal();
     case 'mcp-btn': return mcpModal();
+    case 'agents-btn': return agentsModal();
+    case 'dispatch': {
+      const agent = $('#f-assignee').value;
+      if (!agent) { toast('Сначала выберите агента в поле «Исполнитель»', true); return $('#f-assignee').focus(); }
+      await api('/tasks/' + openTaskId, 'PATCH', taskFields());
+      await api(`/tasks/${openTaskId}/dispatch`, 'POST', { agent });
+      toast(`${agent} отправлен на задачу #${openTaskId}`); await refresh(); return openTask(openTaskId);
+    }
     case 'create': {
       const title = $('#n-title').value.trim(); if (!title) return $('#n-title').focus();
       await api('/tasks', 'POST', { title, description: $('#n-desc').value, priority: $('#n-prio').value, labels: labels($('#n-labels').value) });
       closeModal(); return refresh();
     }
     case 'save':
-      await api('/tasks/' + openTaskId, 'PATCH', {
-        title: $('#f-title').value, description: $('#f-desc').value, status: $('#f-status').value,
-        priority: $('#f-prio').value, assignee: $('#f-assignee').value.trim() || null, labels: labels($('#f-labels').value),
-      });
+      await api('/tasks/' + openTaskId, 'PATCH', taskFields());
       toast('Сохранено'); await refresh(); return openTask(openTaskId);
     case 'del':
       if (!confirm('Удалить задачу?')) return;
@@ -246,6 +305,10 @@ document.addEventListener('keydown', (e) => {
 $('#search').addEventListener('input', (e) => { search = e.target.value; renderBoard(); });
 $('#agent-filter').addEventListener('change', (e) => { agentFilter = e.target.value; renderBoard(); });
 
+const taskFields = () => ({
+  title: $('#f-title').value, description: $('#f-desc').value, status: $('#f-status').value,
+  priority: $('#f-prio').value, assignee: $('#f-assignee').value || null, labels: labels($('#f-labels').value),
+});
 async function review(id, decision, comment = '') {
   await api(`/tasks/${id}/review`, 'POST', { decision, comment });
   toast(decision === 'accept' ? 'Задача принята ✓' : 'Возвращено агенту на доработку');
@@ -286,6 +349,7 @@ function connect() {
   es.onmessage = (m) => {
     try {
       const c = JSON.parse(m.data);
+      if (['run_failed', 'run_stalled'].includes(c.type)) { toast(`⚠ ${c.event.message}`, true); notify('Агент остановился', c.event.message); }
       if (c.type === 'task_ready') {
         toast(`✓ ${c.event.actor}: ${c.event.message}`);
         notify('Задача готова к проверке', c.event.message);

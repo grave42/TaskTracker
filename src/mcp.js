@@ -40,7 +40,7 @@ export function createMcpServer(store, defaultAgent = 'agent') {
   server.registerTool('get_task', {
     description: 'Get full task details: description, comments, questions and answers, recent activity.',
     inputSchema: { id: z.number().int() },
-  }, wrap(({ id }) => store.getTask(id)));
+  }, wrap(({ id }) => { const { runs, last_run, ...t } = store.getTask(id); return t; }));
 
   server.registerTool('create_task', {
     description: 'Create a new task (e.g. to split work into subtasks or to record a follow-up).',

@@ -51,6 +51,29 @@ export class Store extends EventEmitter {
         created_at TEXT NOT NULL,
         answered_at TEXT
       );
+      CREATE TABLE IF NOT EXISTS agents (
+        name TEXT PRIMARY KEY,
+        kind TEXT NOT NULL,
+        bin TEXT NOT NULL,
+        workdir TEXT NOT NULL,
+        mode TEXT NOT NULL DEFAULT 'safe',
+        model TEXT,
+        enabled INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS runs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+        agent TEXT NOT NULL,
+        kind TEXT NOT NULL DEFAULT 'start',
+        status TEXT NOT NULL DEFAULT 'queued',
+        pid INTEGER,
+        exit_code INTEGER,
+        log TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL,
+        started_at TEXT,
+        finished_at TEXT
+      );
       CREATE TABLE IF NOT EXISTS events (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         task_id INTEGER,
@@ -92,7 +115,8 @@ export class Store extends EventEmitter {
     if (q) { where.push('(title LIKE ? OR description LIKE ?)'); args.push(`%${q}%`, `%${q}%`); }
     const sql = `SELECT t.*,
         (SELECT COUNT(*) FROM questions WHERE task_id=t.id AND status='open') AS open_questions,
-        (SELECT COUNT(*) FROM comments WHERE task_id=t.id) AS comment_count
+        (SELECT COUNT(*) FROM comments WHERE task_id=t.id) AS comment_count,
+        (SELECT status FROM runs WHERE task_id=t.id AND status IN ('queued','running') ORDER BY id DESC LIMIT 1) AS run_status
       FROM tasks t ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
       ORDER BY t.updated_at DESC LIMIT ?`;
     let rows = this.db.prepare(sql).all(...args, limit).map(r => this._task(r));
@@ -105,6 +129,9 @@ export class Store extends EventEmitter {
     t.comments = this.db.prepare('SELECT * FROM comments WHERE task_id=? ORDER BY id').all(id);
     t.questions = this.db.prepare('SELECT * FROM questions WHERE task_id=? ORDER BY id').all(id).map(r => this._question(r));
     t.events = this.db.prepare('SELECT * FROM events WHERE task_id=? ORDER BY id DESC LIMIT 50').all(id);
+    t.runs = this.runsForTask(id);
+    const last = this.lastRun(id);
+    t.last_run = last ? { ...last, log: last.log.slice(-12_000) } : null;
     return t;
   }
 
@@ -240,6 +267,60 @@ export class Store extends EventEmitter {
         this.db.prepare('UPDATE tasks SET status=?, updated_at=? WHERE id=?').run(q.prev_status, now(), q.task_id);
       }
     }
+  }
+
+  // ---------- agents & runs ----------
+  logEvent(taskId, actor, type, message) { this._log(taskId, actor, type, message); }
+
+  listAgents() { return this.db.prepare('SELECT * FROM agents ORDER BY created_at, name').all().map(a => ({ ...a, enabled: !!a.enabled })); }
+  getAgent(name) {
+    const a = this.db.prepare('SELECT * FROM agents WHERE name=?').get(name);
+    return a ? { ...a, enabled: !!a.enabled } : null;
+  }
+  createAgent({ name, kind, bin, workdir, mode = 'safe', model = null }) {
+    this.db.prepare('INSERT INTO agents (name, kind, bin, workdir, mode, model, created_at) VALUES (?,?,?,?,?,?,?)')
+      .run(name, kind, bin, workdir, mode, model, now());
+    this.emit('change', { type: 'agents_changed', task_id: null });
+    return this.getAgent(name);
+  }
+  updateAgent(name, patch) {
+    if (!this.getAgent(name)) throw new Error(`Agent "${name}" not found`);
+    const f = {};
+    for (const k of ['bin', 'workdir', 'mode', 'model']) if (patch[k] !== undefined) f[k] = patch[k] || null;
+    if (patch.enabled !== undefined) f.enabled = patch.enabled ? 1 : 0;
+    if (f.mode) this._check(f.mode, ['safe', 'full'], 'mode');
+    const keys = Object.keys(f);
+    if (keys.length) this.db.prepare(`UPDATE agents SET ${keys.map(k => k + '=?').join(',')} WHERE name=?`).run(...keys.map(k => f[k]), name);
+    this.emit('change', { type: 'agents_changed', task_id: null });
+    return this.getAgent(name);
+  }
+
+  createRun({ task_id, agent, kind = 'start' }) {
+    const r = this.db.prepare('INSERT INTO runs (task_id, agent, kind, created_at) VALUES (?,?,?,?)').run(task_id, agent, kind, now());
+    return this.getRun(Number(r.lastInsertRowid));
+  }
+  getRun(id) { return this.db.prepare('SELECT * FROM runs WHERE id=?').get(id) ?? null; }
+  updateRun(id, fields) {
+    const keys = Object.keys(fields);
+    this.db.prepare(`UPDATE runs SET ${keys.map(k => k + '=?').join(',')} WHERE id=?`).run(...keys.map(k => fields[k]), id);
+    return this.getRun(id);
+  }
+  appendRunLog(id, text) {
+    const MAX = 120_000;
+    const cur = this.db.prepare('SELECT log FROM runs WHERE id=?').get(id)?.log ?? '';
+    let next = cur + text;
+    if (next.length > MAX) next = '…\n' + next.slice(next.length - MAX);
+    this.db.prepare('UPDATE runs SET log=? WHERE id=?').run(next, id);
+  }
+  runsForTask(taskId) {
+    return this.db.prepare('SELECT id, task_id, agent, kind, status, exit_code, created_at, started_at, finished_at FROM runs WHERE task_id=? ORDER BY id DESC LIMIT 20').all(taskId);
+  }
+  activeRun(taskId) { return this.db.prepare("SELECT * FROM runs WHERE task_id=? AND status IN ('queued','running') ORDER BY id DESC LIMIT 1").get(taskId) ?? null; }
+  lastRun(taskId) { return this.db.prepare('SELECT * FROM runs WHERE task_id=? ORDER BY id DESC LIMIT 1').get(taskId) ?? null; }
+  runningForAgent(name) { return this.db.prepare("SELECT * FROM runs WHERE agent=? AND status='running' LIMIT 1").get(name) ?? null; }
+  queuedRuns() { return this.db.prepare("SELECT * FROM runs WHERE status='queued' ORDER BY id").all(); }
+  recoverRuns() {
+    this.db.prepare("UPDATE runs SET status='lost', finished_at=? WHERE status IN ('running','queued')").run(now());
   }
 
   // ---------- misc ----------

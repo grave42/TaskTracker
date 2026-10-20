@@ -145,3 +145,14 @@ textarea { resize: vertical; min-height: 90px; }
 .review-block { border: var(--b); background: #efeaff; padding: 12px; box-shadow: var(--shadow); }
 .review-block textarea { width: 100%; border: var(--b); background: #fff; padding: 7px 9px; }
 .review-bar .btn { flex: 1; white-space: nowrap; padding: 4px 6px; }
+
+.chip.running { background: var(--acid); animation: blink 1.4s steps(2) infinite; }
+.chip.okc { background: var(--acid); } .chip.badc { background: var(--signal); color: #fff; }
+.run-block h3 { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.run-st { font: 600 11px var(--mono); border: 2px solid var(--ink); padding: 1px 7px; text-transform: none; letter-spacing: 0; background: var(--paper2); }
+.run-st.running { background: var(--acid); } .run-st.failed { background: var(--signal); color: #fff; } .run-st.queued { background: #ffe08a; }
+.runlog { max-height: 280px; font-size: 12px; white-space: pre-wrap; word-break: break-word; }
+.agent-card { border: var(--b); background: var(--card); padding: 12px; box-shadow: var(--shadow); display: flex; flex-direction: column; gap: 8px; }
+.agent-top { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.agent-path { font: 12px var(--mono); color: var(--mute); word-break: break-all; }
+.btn[disabled] { opacity: .45; pointer-events: none; }
