@@ -7,7 +7,9 @@
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
     "test": "node --test \"test/*.test.js\"",
-    "demo:agent": "node scripts/demo-agent.js"
+    "demo:agent": "node scripts/demo-agent.js",
+    "check:secrets": "node scripts/check-secrets.js --all",
+    "prepare": "node scripts/install-hooks.js"
   },
   "keywords": [],
   "author": "",

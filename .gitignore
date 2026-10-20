@@ -1,4 +1,42 @@
+# dependencies
 node_modules/
-data/
-*.log
 
+# runtime data: tasks, comments, agent logs (may contain private information)
+data/
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+
+# secrets and credentials
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa*
+id_ed25519*
+auth.json
+credentials*.json
+service.json
+*.token
+
+# local agent state (agents run inside the project folder and may write here)
+.claude/
+.opencode/
+.cursor/
+.aider*
+opencode.json
+opencode.jsonc
+CLAUDE.local.md
+
+# logs, temp, OS
+*.log
+*.out
+*.err
+tmp/
+.DS_Store
+Thumbs.db
