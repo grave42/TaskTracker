@@ -33,6 +33,26 @@ function toast(msg, err = false) {
   setTimeout(() => el.remove(), 4500);
 }
 
+// ---------- theme ----------
+const darkQuery = matchMedia('(prefers-color-scheme: dark)');
+function storedTheme() {
+  try { const t = localStorage.getItem('theme'); return t === 'dark' || t === 'light' ? t : null; } catch { return null; }
+}
+function applyTheme(theme) {
+  document.documentElement.dataset.theme = theme;
+  const dark = theme === 'dark';
+  const btn = $('#theme-btn');
+  btn.textContent = dark ? '☀ Светлая' : '☾ Тёмная';
+  btn.title = dark ? 'Включить светлую тему' : 'Включить тёмную тему';
+}
+function toggleTheme() {
+  const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
+  try { localStorage.setItem('theme', next); } catch { /* storage unavailable: theme lasts for this session */ }
+  applyTheme(next);
+}
+applyTheme(storedTheme() || (darkQuery.matches ? 'dark' : 'light'));
+darkQuery.addEventListener('change', (e) => { if (!storedTheme()) applyTheme(e.matches ? 'dark' : 'light'); });
+
 // agent identity: deterministic colour + shape
 const COLORS = ['#ff4b1f', '#6b4cff', '#5ec8ff', '#c9f23a', '#ff8fc7', '#ffb21f', '#2fbf71'];
 function hash(s) { let h = 0; for (const c of s) h = (h * 31 + c.charCodeAt(0)) >>> 0; return h; }
@@ -269,6 +289,7 @@ document.addEventListener('click', async (e) => {
       if (!c) { toast('Опишите, что нужно исправить', true); return $('#f-review').focus(); }
       return review(openTaskId, 'reject', c);
     }
+    case 'theme-btn': return toggleTheme();
     case 'new-btn': return newTaskModal();
     case 'mcp-btn': return mcpModal();
     case 'agents-btn': return agentsModal();
