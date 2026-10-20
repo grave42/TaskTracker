@@ -44,6 +44,7 @@ export function createApp(store = new Store()) {
   api.post('/tasks', h(r => store.createTask(r.body, actor(r))));
   api.patch('/tasks/:id', h(r => store.updateTask(+r.params.id, r.body, actor(r))));
   api.delete('/tasks/:id', h(r => store.deleteTask(+r.params.id)));
+  api.post('/tasks/:id/review', h(r => store.reviewTask(+r.params.id, r.body.decision, r.body.comment, actor(r))));
   api.post('/tasks/:id/comments', h(r => store.addComment(+r.params.id, r.body.body, actor(r))));
   api.post('/tasks/:id/questions', h(r => store.askQuestion({ ...r.body, task_id: +r.params.id }, r.body.actor || 'human')));
   api.post('/questions/:id/answer', h(r => store.answerQuestion(+r.params.id, r.body.answer, actor(r))));

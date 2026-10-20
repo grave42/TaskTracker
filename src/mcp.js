@@ -4,10 +4,13 @@ import { STATUSES, PRIORITIES, URGENCIES } from './store.js';
 
 const ok = (data) => ({ content: [{ type: 'text', text: typeof data === 'string' ? data : JSON.stringify(data, null, 2) }] });
 const fail = (e) => ({ isError: true, content: [{ type: 'text', text: `Error: ${e.message}` }] });
+const noDone = (st) => {
+  if (st === 'done') throw new Error('Agents cannot set status "done". Use finish_task (status "review"): the human accepts the result.');
+};
 const wrap = (fn) => async (args) => { try { return ok(await fn(args)); } catch (e) { return fail(e); } };
 
 const INSTRUCTIONS = `You are connected to TaskTracker, a task board shared with a human.
-- Work on tasks via list_tasks / claim_task / update_task / add_comment. Set status "review" when you finish, not "done" (the human closes tasks).
+- Work on tasks via list_tasks / claim_task / update_task / add_comment. When finished call finish_task with a summary (status "review"). You cannot set "done": the human accepts the task or returns it with remarks (status goes back to in_progress and a comment appears), so re-read get_task for tasks you hand over.
 - NEVER guess when requirements are ambiguous, a decision is risky, or you are stuck: call ask_human.
   Use urgency "blocking" if you cannot continue without the answer (the task is auto-marked blocked), "normal" if you can proceed on another part, "low" for FYI-style questions.
   Offer "options" for choices (the human gets one-click buttons); omit them for open questions.
@@ -50,7 +53,7 @@ export function createMcpServer(store, defaultAgent = 'agent') {
       labels: z.array(z.string()).optional(),
       agent,
     },
-  }, wrap(({ agent: a, ...rest }) => store.createTask(rest, who(a))));
+  }, wrap(({ agent: a, ...rest }) => { noDone(rest.status); return store.createTask(rest, who(a)); }));
 
   server.registerTool('update_task', {
     description: 'Update fields of a task. Move to "in_progress" when starting, "review" when finished, "blocked" if stuck.',
@@ -64,7 +67,16 @@ export function createMcpServer(store, defaultAgent = 'agent') {
       labels: z.array(z.string()).optional(),
       agent,
     },
-  }, wrap(({ id, agent: a, ...patch }) => store.updateTask(id, patch, who(a))));
+  }, wrap(({ id, agent: a, ...patch }) => { noDone(patch.status); return store.updateTask(id, patch, who(a)); }));
+
+  server.registerTool('finish_task', {
+    description: 'Hand the task over for human review: posts your summary as a comment and moves the task to "review". The human then accepts it (done) or returns it to in_progress with remarks: re-read get_task for returned tasks.',
+    inputSchema: { id: z.number().int(), summary: z.string().min(1).describe('What was done, how to verify, caveats'), agent },
+  }, wrap(({ id, summary, agent: a }) => {
+    const me = who(a);
+    store.addComment(id, summary, me);
+    return store.updateTask(id, { status: 'review' }, me);
+  }));
 
   server.registerTool('claim_task', {
     description: 'Assign the task to yourself and move it to in_progress. Fails if someone else already holds it.',

@@ -54,3 +54,23 @@ test('errors are returned as tool errors', async () => {
     assert.match((await call('claim_task', { id: t.id, agent: 'b' })).error, /already assigned/);
   } finally { await client.close(); http.close(); }
 });
+
+test('review flow: agent cannot set done, finish_task -> human rejects -> agent finishes -> human accepts', async () => {
+  const { http, url, client, call } = await setup();
+  const post = (p, b) => fetch(url + p, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(b) }).then(r => r.json());
+  try {
+    const t = await call('create_task', { title: 'Feature', agent: 'bot' });
+    await call('claim_task', { id: t.id, agent: 'bot' });
+    assert.match((await call('update_task', { id: t.id, status: 'done', agent: 'bot' })).error, /cannot set/);
+    assert.equal((await call('finish_task', { id: t.id, summary: 'Implemented', agent: 'bot' })).status, 'review');
+
+    assert.match((await post(`/api/tasks/${t.id}/review`, { decision: 'reject' })).error, /comment is required/);
+    const back = await post(`/api/tasks/${t.id}/review`, { decision: 'reject', comment: 'Add tests' });
+    assert.equal(back.status, 'in_progress');
+    assert.match(back.comments.at(-1).body, /Add tests/);
+
+    await call('finish_task', { id: t.id, summary: 'Tests added', agent: 'bot' });
+    assert.equal((await post(`/api/tasks/${t.id}/review`, { decision: 'accept' })).status, 'done');
+    assert.match((await post(`/api/tasks/${t.id}/review`, { decision: 'accept' })).error, /not in review/);
+  } finally { await client.close(); http.close(); }
+});

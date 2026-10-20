@@ -59,9 +59,11 @@ function render() {
   $('#stats').innerHTML =
     `<span class="stat"><b>${state.tasks.length}</b>задач</span>` +
     `<span class="stat"><b>${s.byStatus.in_progress || 0}</b>в работе</span>` +
+    `<span class="stat ${s.byStatus.review ? 'review' : ''}"><b>${s.byStatus.review || 0}</b>на проверке</span>` +
     `<span class="stat ${s.openQuestions ? 'hot' : ''}"><b>${s.openQuestions}</b>вопросов к вам</span>`;
   $('#beacon').classList.toggle('on', s.openQuestions > 0);
-  document.title = (s.openQuestions ? `(${s.openQuestions}) ` : '') + 'TaskTracker';
+  const attention = s.openQuestions + (s.byStatus.review || 0);
+  document.title = (attention ? `(${attention}) ` : '') + 'TaskTracker';
 
   const sel = $('#agent-filter');
   const names = [...new Set(state.tasks.map(t => t.assignee).filter(Boolean))].sort();
@@ -91,7 +93,14 @@ function card(t) {
     <div class="id">#${t.id}</div><h4>${esc(t.title)}</h4>
     <div class="meta">${avatar(t.assignee)}
       ${t.labels.map(l => `<span class="chip">${esc(l)}</span>`).join('')}
-      ${t.comment_count ? `<span>💬${t.comment_count}</span>` : ''}</div></article>`;
+      ${t.comment_count ? `<span>💬${t.comment_count}</span>` : ''}${stale(t)}</div>
+    ${t.status === 'review' ? `<div class="review-bar"><button class="btn sm ok" data-accept="${t.id}">✓ Принять</button><button class="btn sm" data-rework="${t.id}">↩ Вернуть</button></div>` : ''}</article>`;
+}
+
+function stale(t) {
+  if (t.status !== 'in_progress') return '';
+  const m = Math.floor((Date.now() - new Date(t.updated_at)) / 60000);
+  return m >= 30 ? `<span class="chip stale" title="Нет активности">⏳ тихо ${m >= 120 ? Math.floor(m / 60) + 'ч' : m + 'м'}</span>` : '';
 }
 
 function renderLine() {
@@ -142,6 +151,9 @@ async function openTask(id) {
           <label class="field full">Описание<textarea id="f-desc">${esc(t.description)}</textarea></label>
         </div>
         <div class="row"><button class="btn primary" id="save">Сохранить</button><button class="btn danger" id="del">Удалить</button></div>
+        ${t.status === 'review' ? `<div class="block review-block"><h3>Ревью: агент сдал работу</h3>
+          <textarea data-keep="review" id="f-review" placeholder="Замечания (обязательны, если возвращаете на доработку)"></textarea>
+          <div class="row" style="margin-top:8px"><button class="btn ok" id="accept">✓ Принять — готово</button><button class="btn danger" id="reject">↩ Вернуть на доработку</button></div></div>` : ''}
         ${t.questions.length ? `<div class="block"><h3>Вопросы</h3>${t.questions.map(q => q.status === 'open' ? tele({ ...q, task_title: t.title }) :
           `<div class="comment"><div class="who"><span>${esc(q.asker)} спрашивал</span><span>${q.status === 'answered' ? '✓' : '⊘'}</span></div>${esc(q.question)}\n<b>→ ${esc(q.answer)}</b></div>`).join('')}</div>` : ''}
         <div class="block"><h3>Комментарии</h3>
@@ -184,6 +196,8 @@ ask_human   check_answer   wait_for_answer   get_inbox</pre></div>
 document.addEventListener('click', async (e) => {
   const t = e.target;
   if (t.closest('[data-close]') || t === $('#modal')) return closeModal();
+  const acc = t.closest('[data-accept]'); if (acc) return review(+acc.dataset.accept, 'accept');
+  const rw = t.closest('[data-rework]'); if (rw) { await openTask(+rw.dataset.rework); return $('#f-review')?.focus(); }
   const cardEl = t.closest('.card'); if (cardEl) return openTask(+cardEl.dataset.id);
   const ref = t.closest('[data-open]'); if (ref) return openTask(+ref.dataset.open);
   const ans = t.closest('[data-answer]'); if (ans) return answer(+ans.dataset.answer, ans.dataset.value);
@@ -194,6 +208,12 @@ document.addEventListener('click', async (e) => {
   const dis = t.closest('[data-dismiss]');
   if (dis) { await api(`/questions/${dis.dataset.dismiss}/dismiss`, 'POST', {}); toast('Вопрос отклонён: агент решит сам'); return refresh(); }
   switch (t.id) {
+    case 'accept': return review(openTaskId, 'accept', $('#f-review').value);
+    case 'reject': {
+      const c = $('#f-review').value.trim();
+      if (!c) { toast('Опишите, что нужно исправить', true); return $('#f-review').focus(); }
+      return review(openTaskId, 'reject', c);
+    }
     case 'new-btn': return newTaskModal();
     case 'mcp-btn': return mcpModal();
     case 'create': {
@@ -226,6 +246,11 @@ document.addEventListener('keydown', (e) => {
 $('#search').addEventListener('input', (e) => { search = e.target.value; renderBoard(); });
 $('#agent-filter').addEventListener('change', (e) => { agentFilter = e.target.value; renderBoard(); });
 
+async function review(id, decision, comment = '') {
+  await api(`/tasks/${id}/review`, 'POST', { decision, comment });
+  toast(decision === 'accept' ? 'Задача принята ✓' : 'Возвращено агенту на доработку');
+  closeModal(); refresh();
+}
 const labels = (s) => s.split(',').map(x => x.trim()).filter(Boolean);
 async function answer(id, value) {
   await api(`/questions/${id}/answer`, 'POST', { answer: value });
@@ -249,15 +274,31 @@ let lastOpen = new Set();
 async function refresh() {
   state = await api('/state');
   const open = new Set(state.questions.filter(q => q.status === 'open').map(q => q.id));
-  for (const q of state.questions) if (open.has(q.id) && !lastOpen.has(q.id) && lastOpen.size + 1 > 0 && started) toast(`${q.asker} спрашивает: ${q.question}`);
+  for (const q of state.questions) if (open.has(q.id) && !lastOpen.has(q.id) && lastOpen.size + 1 > 0 && started) { toast(`${q.asker} спрашивает: ${q.question}`); notify(`${q.asker} спрашивает`, q.question); }
   lastOpen = open; started = true;
   render();
-  if (openTaskId && !$('#modal').hidden && !document.activeElement?.closest('.fields')) openTask(openTaskId);
+  if (openTaskId && !$('#modal').hidden && !document.activeElement?.closest('#modal input, #modal textarea, #modal select')) openTask(openTaskId);
 }
 let started = false;
 let timer;
 function connect() {
   const es = new EventSource('/api/stream');
-  es.onmessage = () => { clearTimeout(timer); timer = setTimeout(refresh, 120); };
+  es.onmessage = (m) => {
+    try {
+      const c = JSON.parse(m.data);
+      if (c.type === 'task_ready') {
+        toast(`✓ ${c.event.actor}: ${c.event.message}`);
+        notify('Задача готова к проверке', c.event.message);
+      }
+    } catch { /* ignore malformed event */ }
+    clearTimeout(timer); timer = setTimeout(refresh, 120);
+  };
 }
+function notify(title, body) {
+  if ('Notification' in window && Notification.permission === 'granted' && document.hidden) new Notification(title, { body });
+}
+if ('Notification' in window && Notification.permission === 'default') {
+  document.addEventListener('click', () => Notification.requestPermission(), { once: true });
+}
+setInterval(renderBoard, 60000);
 refresh().then(connect);

@@ -138,7 +138,24 @@ export class Store extends EventEmitter {
     if (fields.status && fields.status !== t.status) notes.push(`status ${t.status} → ${fields.status}`);
     if (fields.assignee !== undefined && fields.assignee !== t.assignee) notes.push(`assignee → ${fields.assignee ?? 'nobody'}`);
     if (fields.priority && fields.priority !== t.priority) notes.push(`priority → ${fields.priority}`);
-    this._log(id, actor, 'task_updated', `#${id}: ${notes.join(', ') || 'edited'}`);
+    const ready = fields.status === 'review' && t.status !== 'review';
+    this._log(id, actor, ready ? 'task_ready' : 'task_updated',
+      ready ? `finished #${id} «${t.title}» — ready for review` : `#${id}: ${notes.join(', ') || 'edited'}`);
+    return this.getTask(id);
+  }
+
+  reviewTask(id, decision, comment = '', actor = 'human') {
+    const t = this._requireTask(id);
+    if (t.status !== 'review') throw new Error(`Task #${id} is not in review (status: ${t.status})`);
+    if (decision === 'accept') {
+      this.updateTask(id, { status: 'done' }, actor);
+      if (comment.trim()) this.addComment(id, comment, actor);
+    } else if (decision === 'reject') {
+      if (!comment.trim()) throw new Error('Explain what needs to be fixed (comment is required)');
+      this.addComment(id, `↩ Returned for rework: ${comment.trim()}`, actor);
+      this.updateTask(id, { status: 'in_progress' }, actor);
+      this._log(id, actor, 'task_rejected', `returned #${id} for rework`);
+    } else throw new Error('decision must be "accept" or "reject"');
     return this.getTask(id);
   }
 

@@ -137,3 +137,11 @@ textarea { resize: vertical; min-height: 90px; }
 .toast { background: var(--ink); color: var(--paper); border: var(--b); padding: 9px 14px; font: 600 13px var(--mono); box-shadow: var(--shadow); animation: slide .2s; max-width: 380px; }
 .toast.err { background: var(--signal); color: #fff; }
 
+
+.stat.review { background: var(--violet); color: #fff; }
+.btn.ok { background: var(--acid); }
+.review-bar { display: flex; gap: 6px; margin-top: 9px; }
+.chip.stale { background: #ffe08a; }
+.review-block { border: var(--b); background: #efeaff; padding: 12px; box-shadow: var(--shadow); }
+.review-block textarea { width: 100%; border: var(--b); background: #fff; padding: 7px 9px; }
+.review-bar .btn { flex: 1; white-space: nowrap; padding: 4px 6px; }
