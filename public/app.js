@@ -199,6 +199,7 @@ function agentsModal() {
       <div class="fields">
         <label class="field full">Папка проекта${a.workdir_ok ? '' : ' — не существует!'}<input data-f="workdir" value="${esc(a.workdir)}"></label>
         <label class="field">Права<select data-f="mode"><option value="safe" ${a.mode === 'safe' ? 'selected' : ''}>Безопасно: правка файлов, без команд</option><option value="full" ${a.mode === 'full' ? 'selected' : ''}>Полный доступ (команды, сеть)</option></select></label>
+        <label class="field full">Модель (необязательно, иначе из настроек агента)<input data-f="model" value="${esc(a.model || '')}" placeholder="${a.kind === 'opencode' ? 'например openrouter/anthropic/claude-sonnet-5.5' : 'например sonnet'}"></label>
         <label class="field">Включён<select data-f="enabled"><option value="1" ${a.enabled ? 'selected' : ''}>да</option><option value="0" ${a.enabled ? '' : 'selected'}>нет</option></select></label>
       </div><div class="row"><button class="btn sm primary" data-save-agent="${esc(a.name)}">Сохранить</button></div></div>`).join('')
       || '<div class="quiet"><b>агентов нет</b>Установите Claude Code (<code>claude</code>) или OpenCode (<code>opencode</code>) и перезапустите сервер.</div>'}
@@ -245,7 +246,7 @@ document.addEventListener('click', async (e) => {
   if (sa) {
     const box = sa.closest('.agent-card');
     await api('/agents/' + encodeURIComponent(sa.dataset.saveAgent), 'PATCH', {
-      workdir: box.querySelector('[data-f=workdir]').value.trim(), mode: box.querySelector('[data-f=mode]').value,
+      workdir: box.querySelector('[data-f=workdir]').value.trim(), model: box.querySelector('[data-f=model]').value.trim(), mode: box.querySelector('[data-f=mode]').value,
       enabled: box.querySelector('[data-f=enabled]').value === '1',
     });
     toast('Сохранено'); await refresh(); return agentsModal();

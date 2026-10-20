@@ -45,13 +45,24 @@ export const KINDS = {
     },
   },
   opencode: {
-    label: 'OpenCode', bins: ['opencode'], experimental: true,
-    build({ mcpUrl, name, mode }) {
-      const cfg = { mcp: { tasktracker: { type: 'remote', url: mcpUrl, headers: { 'x-agent-name': name }, enabled: true } } };
-      if (mode === 'full') cfg.permission = { edit: 'allow', bash: 'allow', webfetch: 'allow' };
-      return { args: ['run'], env: { OPENCODE_CONFIG_CONTENT: JSON.stringify(cfg) } };
+    label: 'OpenCode', bins: ['opencode'], stderrPrefix: '',
+    // OpenCode Desktop bundles the CLI without adding it to PATH
+    extraPaths: () => [
+      process.env.LOCALAPPDATA && join(process.env.LOCALAPPDATA, 'Programs', '@opencodedesktop', 'resources', 'opencode-cli.exe'),
+      process.env.LOCALAPPDATA && join(process.env.LOCALAPPDATA, 'Programs', 'opencode', 'opencode.exe'),
+      '/Applications/OpenCode.app/Contents/MacOS/opencode-cli',
+      process.env.HOME && join(process.env.HOME, '.opencode', 'bin', 'opencode'),
+    ].filter(Boolean),
+    build({ mcpUrl, name, mode, model }) {
+      // --standalone: a private server, so the per-run config below is honoured (the shared service ignores it)
+      const cfg = { mcp: { servers: { tasktracker: { type: 'remote', url: mcpUrl, headers: { 'x-agent-name': name }, oauth: false, codemode: false } } } };
+      const args = ['run', '--standalone', '--title', `TaskTracker: ${name}`];
+      if (model) args.push('--model', model);
+      if (mode === 'full') args.push('--auto');
+      else cfg.permissions = [{ action: 'shell', resource: '*', effect: 'deny' }, { action: 'external_directory', resource: '*', effect: 'deny' }];
+      return { args, env: { OPENCODE_CONFIG_CONTENT: JSON.stringify(cfg) } };
     },
-    format: (line) => line,
+    format: (line) => line.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, ''),
   },
 };
 
@@ -102,7 +113,7 @@ export class Dispatcher {
     const have = new Set(this.store.listAgents().map(a => a.kind));
     for (const [kind, k] of Object.entries(KINDS)) {
       if (have.has(kind)) continue;
-      const bin = k.bins.map(which).find(Boolean) || (kind === 'mock' ? process.execPath : null);
+      const bin = k.bins.map(which).find(Boolean) || k.extraPaths?.().find(p => existsSync(p)) || (kind === 'mock' ? process.execPath : null);
       if (bin) this.store.createAgent({ name: kind === 'mock' ? 'mock-agent' : kind, kind, bin, workdir: this.defaultWorkdir });
     }
   }
@@ -176,12 +187,13 @@ export class Dispatcher {
       while ((i = state.buf.indexOf('\n')) >= 0) {
         const line = state.buf.slice(0, i).replace(/\r$/, ''); state.buf = state.buf.slice(i + 1);
         if (!line.trim()) continue;
-        const out = prefix ? prefix + line : kind.format(line);
+        const clean = line.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '');
+        const out = prefix ? prefix + clean : kind.format(clean);
         if (out) push(out + '\n');
       }
     };
     child.stdout.on('data', onLines(''));
-    child.stderr.on('data', onLines('! '));
+    child.stderr.on('data', onLines(kind.stderrPrefix ?? '! '));
     child.stdin.on('error', () => {});
     child.stdin.end(prompt);
     child.on('error', (e) => { clearTimeout(state.timer); flush(); this._finish(run, { code: -1, error: e.message }); });
